@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Court 1 Widget (pulseSAFE, Clean)</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <style>
+    html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0c1326; font-family: Arial, Helvetica, sans-serif; }
+    :root { --bar-height: 96px; }
+    .graphic-bar {
+      position: fixed; left: 0; bottom: 0; width: 100vw; height: var(--bar-height);
+      background: linear-gradient(90deg,#14203a,#22335d 70%);
+      display: grid; grid-template-columns: 1.1fr 2.2fr 1.3fr 2.2fr 1.5fr;
+      box-sizing: border-box; gap: 8px; padding: 6px 8px;
+    }
+    #pulseOverlay {
+      position: fixed; left: 0; bottom: 0; width: 100vw; height: var(--bar-height);
+      background: #800000; pointer-events: none; opacity: 0; transition: opacity 40ms linear;
+      mix-blend-mode: multiply;
+    }
+    .section { position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; overflow: hidden; border-radius: 6px; }
+    .section:not(#court-number)::before { content:""; position:absolute; inset: 4px; background: rgba(0,0,0,0.35); border-radius: 6px; box-shadow: inset 0 0 12px rgba(0,0,0,0.35); }
+    .label { font-weight:700; text-transform:uppercase; font-size: 10px; letter-spacing: 0.08em; z-index:1; margin-bottom: 2px; }
+    #current-event .label { color: #6cff6c; }  /* In Progress label green */
+    #next-event .label    { color: #ffe56b; }  /* Upcoming label yellow */
+    #countdown .label     { color:#d4e5fd; }   /* Time Left/Until label light blue */
+    #current-time .label  { color:#d4e5fd; }   /* Current Time label light blue */
+    .value { font-size: 16px; font-weight:800; z-index:1; text-align:center; line-height: 1.15; color:#fff; }
+    #current-event .value, #next-event .value { font-size: 13px; font-weight:700; line-height:1.1; text-overflow: ellipsis; overflow:hidden; max-height:2.6em; }
+    #countdown .value { font-size: 22px; }
+    #court-number { display:flex; flex-direction:row; align-items:center; justify-content:center; }
+    #court-number .label { font-size: 22px; margin-right: 12px; color:#ffffff; text-shadow: 0 2px 6px rgba(0,0,0,0.45); }
+    #court-number .value { font-size: 36px; font-weight: 900; padding: 4px 10px; letter-spacing: 0.03em; border: 3px solid #ffffff; border-radius: 8px; text-shadow: 0 1px 2px rgba(0,0,0,0.4); background: linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.02)); color:#ffffff; }
+    .meta { font-size: 11px; color:#d8d8d8; opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <div class="graphic-bar" id="bar">
+    <div id="court-number" class="section">
+      <div class="label">Court</div>
+      <div class="value" id="court-val">1</div>
+    </div>
+    <div id="current-event" class="section">
+      <div class="label">In Progress</div>
+      <div class="value" id="cur-val">Loading...</div>
+    </div>
+    <div id="countdown" class="section">
+      <div class="label" id="cd-label">Time Left</div>
+      <div class="value" id="cd-val">--</div>
+    </div>
+    <div id="next-event" class="section">
+      <div class="label">Upcoming</div>
+      <div class="value" id="next-val">Loading next...</div>
+    </div>
+    <div id="current-time" class="section">
+      <div class="label">Current Time</div>
+      <div class="value" id="clock">--:--</div>
+    </div>
+  </div>
+  <div id="pulseOverlay"></div>
+
+<script>
+/* === Court 1 locked === */
+const COURT_NO = 1;
+const AUTH_B64 = "Basic T3JnXzEyNjc0OjEyNjc0XzE4NWFmZGE3LTdiNGYtNGIwYS04YmEwLWE3OWVhYzc4ODExZA==";
+const ORG_MEMBER_ID = "12674";
+
+/* ===== TIME PARSER ===== */
+function parseTimeAny(t, baseDateLocal=null){
+  if(t==null || t==="") return null;
+  if(t instanceof Date) return isNaN(t.getTime())? null : t;
+  if(typeof t==="number"){ return new Date(t > 1e12 ? t : t*1000); }
+  if(typeof t==="string"){
+    const s=t.trim();
+    const m = s.match(/^\/Date\((\d+)\)\/$/i);
+    if(m) return new Date(parseInt(m[1],10));
+    if(/^\d{1,2}:\d{2}(\s*[AP]M)?$/i.test(s)){
+      const base = baseDateLocal || new Date();
+      const [hhmm,ampmRaw] = s.split(/\s+/);
+      let [hh,mm] = hhmm.split(':').map(x=>parseInt(x,10));
+      let ampm = ampmRaw? ampmRaw.toUpperCase() : null;
+      if(ampm){ if(ampm==='PM' && hh<12) hh+=12; if(ampm==='AM' && hh===12) hh=0; }
+      return new Date(base.getFullYear(), base.getMonth(), base.getDate(), hh, mm, 0, 0);
+    }
+    const d = new Date(s);
+    if(!isNaN(d.getTime())) return d;
+  }
+  return null;
+}
+
+/* ===== ARRAY PICKER ===== */
+function pickArray(container){
+  if(!container) return [];
+  if(Array.isArray(container)) return container;
+  if(typeof container==='object'){
+    const keys=['Data','data','Results','Items','Reservations','ReservationList'];
+    for(const k of keys){ if(Array.isArray(container[k])) return container[k]; }
+    if(container.Data && typeof container.Data==='object'){
+      for(const k of keys){ if(Array.isArray(container.Data[k])) return container.Data[k]; }
+    }
+  }
+  return [];
+}
+
+/* ===== COURT MATCHING ===== */
+function extractCourtNumbers(f){
+  if(Array.isArray(f)){
+    const out=[]; f.forEach(i=>{
+      if(typeof i==='number') out.push(i);
+      else if(typeof i==='string') out.push(...extractCourtNumbers(i));
+      else if(i && typeof i==='object'){
+        if(i.Name) out.push(...extractCourtNumbers(i.Name));
+        if(i.CourtName) out.push(...extractCourtNumbers(i.CourtName));
+        if(i.CourtNumber) out.push(Number(i.CourtNumber));
+      }
+    }); return Array.from(new Set(out));
+  }
+  const s=String(f||'').toLowerCase();
+  const nums=new Set(); let m;
+  const rangeRe=/(\d{1,2})\s*[-–]\s*(\d{1,2})/g; while((m=rangeRe.exec(s))!==null){ const a=+m[1], b=+m[2]; for(let i=Math.min(a,b); i<=Math.max(a,b); i++) nums.add(i); }
+  const listRe=/(?:^|[^\d])(\d{1,2})(?=\s*[,&]|$)/g; while((m=listRe.exec(s))!==null){ nums.add(+m[1]); }
+  const singleRe=/court[s]?\s*#?-?\s*(\d{1,2})/g; while((m=singleRe.exec(s))!==null){ nums.add(+m[1]); }
+  return Array.from(nums);
+}
+function matchesCourtAny(x, n){
+  if(!x) return true;
+  if (Number(x)===n) return true;
+  if (typeof x==='string'){
+    const s=x.toLowerCase();
+    if (s.includes(`court ${n}`) || s.includes(`court#${n}`) || s.includes(`court-${n}`)) return true;
+  }
+  return extractCourtNumbers(x).includes(n);
+}
+
+/* ===== NAME RESOLUTION ===== */
+function resolveName(x){
+  const players=Array.isArray(x.Players)?x.Players:[];
+  const pn=players.map(p=>{ const fn=(p.FirstName||'').trim(), ln=(p.LastName||'').trim(); return fn&&ln ? `${fn} ${(ln[0]||'')}.` : (fn+' '+ln).trim(); }).filter(Boolean);
+  if(pn.length) return pn.join(', ');
+  const fields=['MemberDisplayName','OrganizerName','Organizer','MemberName','MemberFullName','OwnerName','BookedByName','BookerName','CreatedByName','ReservationOwnerName','PrimaryMemberName','CreatedBy','DisplayName','ReservationName','Title','Description','Notes','PlayersText','CreatedByDisplayName'];
+  for(const k of fields){ if(x[k] && String(x[k]).trim()) return String(x[k]).trim(); }
+  if(x.ReservationTypeName && x.ReservationTypeName.trim()) return x.ReservationTypeName.trim();
+  return 'Reserved';
+}
+
+/* ===== PULSE OVERLAY ===== */
+const pulseOverlay = document.getElementById('pulseOverlay');
+let rafId=null, pulseActive=false, basePeriod=1000, startTs=null;
+function startPulse(periodMs){
+  if(!pulseActive){ pulseActive=true; startTs=null; }
+  basePeriod = Math.max(120, periodMs|0);
+  function loop(ts){
+    if(!pulseActive){ pulseOverlay.style.opacity='0'; rafId=null; return; }
+    if(startTs===null) startTs=ts;
+    const t = (ts - startTs) % basePeriod;
+    const phase = Math.sin((t/basePeriod)*Math.PI);
+    const op = 0.1 + 0.8 * phase;
+    pulseOverlay.style.opacity = String(op);
+    rafId = requestAnimationFrame(loop);
+  }
+  if(!rafId) rafId = requestAnimationFrame(loop);
+}
+function stopPulse(){
+  pulseActive=false;
+  if(rafId){ cancelAnimationFrame(rafId); rafId=null; }
+  pulseOverlay.style.opacity='0';
+}
+
+/* ===== COUNTDOWN ===== */
+let countdownTimeout=null, nextEventTime=null;
+function startCountdown(target){
+  clearTimeout(countdownTimeout);
+  function tick(){
+    const now=new Date(); const diff=target - now.getTime();
+    const el=document.getElementById('cd-val');
+    if(diff>0){
+      const m=Math.floor(diff/60000), s=Math.floor((diff%60000)/1000);
+      el.textContent = diff>60000 ? (m+'m') : (s+'s');
+      el.style.color = (diff>60000 && m<=5)||diff<=60000 ? '#ff4d4d' : '#fff';
+      if (diff<=60000){
+        if (diff<=10000)      startPulse(250);
+        else if (diff<=30000) startPulse(500);
+        else                  startPulse(1000);
+      } else {
+        stopPulse();
+      }
+      countdownTimeout = setTimeout(tick, 1000 - now.getMilliseconds());
+    } else {
+      el.textContent='Time Expired'; el.style.color='#ff4d4d';
+      stopPulse();
+      clearTimeout(countdownTimeout);
+      setTimeout(()=>{ if(nextEventTime) startCountdown(nextEventTime); else { el.textContent='No Event'; el.style.color='#fff'; } }, 300000);
+    }
+  }
+  tick();
+}
+
+/* ===== CLOCK ===== */
+function tickClock(){
+  const now=new Date();
+  document.getElementById('clock').textContent = now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true});
+  const delay=(60-now.getSeconds())*1000 - now.getMilliseconds();
+  setTimeout(tickClock, Math.max(250, delay));
+}
+tickClock();
+
+/* ===== FETCH ===== */
+async function fetchJSON(url){ const r=await fetch(url,{headers:{Authorization:AUTH_B64}}); if(!r.ok) throw new Error(r.status+' '+r.statusText); return r.json(); }
+
+/* ===== REFRESH ===== */
+async function refresh(){
+  try{
+    nextEventTime=null;
+    const today=new Date();
+    const dayStr = today.toISOString().slice(0,10);
+    const evUrl=`https://api.courtreserve.com/api/v1/eventcalendar/eventlist?orgMemberId=${ORG_MEMBER_ID}&startDate=${dayStr}T00:00:00&endDate=${dayStr}T23:59:59`;
+    const resUrl=`https://api.courtreserve.com/api/v1/reservationreport/listactive?reservationsFromDate=${dayStr}&reservationsToDate=${dayStr}`;
+    const [eRaw,rRaw] = await Promise.all([ fetchJSON(evUrl), fetchJSON(resUrl) ]);
+
+    const eArr = pickArray(eRaw);
+    const rArr = pickArray(rRaw);
+
+    const baseDateLocal = new Date();
+    const events = eArr.filter(x=> matchesCourtAny(x.Courts||x.CourtName||x.CourtNumber, COURT_NO))
+      .map(x=>({name: x.EventName||x.Name||'Event',
+                start: parseTimeAny(x.StartDateTime||x.StartTime||x.Start, baseDateLocal),
+                end:   parseTimeAny(x.EndDateTime||x.EndTime||x.End, baseDateLocal)}));
+
+    const resv = rArr.filter(x=> matchesCourtAny(x.Courts||x.CourtName||x.CourtNumber||x.ResourceName, COURT_NO))
+      .map(x=>({name: resolveName(x),
+                start: parseTimeAny(x.StartTime||x.StartDateTime||x.Start, baseDateLocal),
+                end:   parseTimeAny(x.EndTime||x.EndDateTime||x.End, baseDateLocal)}));
+
+    const all = events.concat(resv).filter(it=> it.start && it.end).sort((a,b)=> a.start - b.start);
+
+    const now=new Date(); let cur=null, nxt=null;
+    for(const item of all){ if(!cur && now>=item.start && now<=item.end) cur=item; if(!nxt && now<item.start) nxt=item; }
+    nextEventTime = nxt ? nxt.start.getTime() : null;
+
+    const curEl=document.getElementById('cur-val');
+    const cdLabel=document.getElementById('cd-label');
+    const cdVal=document.getElementById('cd-val');
+    const nextEl=document.getElementById('next-val');
+
+    if(cur){
+      curEl.innerHTML = `${cur.name}<div class='meta'>${cur.start.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})} - ${cur.end.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>`;
+      cdLabel.textContent='Time Left';
+      startCountdown(cur.end.getTime());
+    } else {
+      curEl.textContent='No current event';
+      if(nxt){
+        cdLabel.textContent='Time Until';
+        startCountdown(nxt.start.getTime());
+      } else {
+        cdVal.textContent='--';
+        stopPulse();
+      }
+    }
+
+    if(nxt) nextEl.innerHTML = `${nxt.name}<div class='meta'>${nxt.start.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})} - ${nxt.end.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>`;
+    else    nextEl.textContent = 'No upcoming event';
+
+  }catch(err){
+    document.getElementById('cur-val').textContent='Error loading data';
+    stopPulse();
+  }
+}
+refresh(); setInterval(refresh, 30000);
+</script>
+</body>
+</html>
